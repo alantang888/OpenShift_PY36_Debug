@@ -1,0 +1,99 @@
+---
+kind: ImageStream
+apiVersion: v1
+metadata:
+  name: py36-debug
+spec:
+  tags:
+    - annotations:
+      name: from
+      from:
+        kind: DockerImage
+        name: python:3.6
+
+
+---
+kind: BuildConfig
+apiVersion: v1
+metadata:
+  name: py36-debug
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: py36-debug:latest
+  source:
+    dockerfile: |
+      FROM python:3.6
+
+      RUN apt-get update && \
+          apt-get install -y openssh-server && \
+          mkdir -p /var/run/sshd && \
+          echo 'root:changeme' | chpasswd && \
+          sed -i 's/PermitRootLogin without-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+          # SSH login fix. Otherwise user is kicked off after login
+          sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
+
+      EXPOSE 22
+      CMD ["/usr/sbin/sshd", "-D"]
+
+  strategy:
+    type: Docker
+    dockerStrategy:
+      from:
+        kind: ImageStreamTag
+        name: py36-debug:from
+
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: useroot
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: py36-debug
+spec:
+  selector:
+    app: py36-debug
+  ports:
+  - name: sshd
+    protocol: TCP
+    port: 22
+    targetPort: 22
+    nodePort: 30022
+  type: NodePort
+
+---
+kind: DeploymentConfig
+apiVersion: v1
+metadata:
+  name: py36-debug
+  labels:
+    app: py36-debug
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: py36-debug
+    spec:
+      containers:
+        - name: py36-debug
+          image: 172.30.1.1:5000/myproject/py36-debug
+          port:
+          - name: sshd
+            containerPort: 22
+      serviceAccount: useroot
+    triggers:
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+        - py36-debug
+        from:
+          kind: ImageStreamTag
+          name: py36-debug:latest
+    - type: ConfigChange
